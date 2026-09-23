@@ -778,6 +778,111 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     ]
 
 
+def test_translate_anthropic_to_openai_folds_midturn_system_into_user_for_openai_dialect_provider():
+    """
+    A resolved provider on the chat-completions bridge means an OpenAI-dialect backend, whose
+    chat templates (e.g. vLLM's) reject a system message that is not first. The in-sequence
+    correction is prepended to the next user turn instead, keeping the top-level prompt at 0.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "claude-haiku-3.6",
+            "max_tokens": 100,
+            "system": "Trusted top-level prompt.",
+            "messages": [
+                {"role": "user", "content": "First question."},
+                {"role": "assistant", "content": "First answer."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        },
+        custom_llm_provider="hosted_vllm",
+    )
+
+    assert openai_request["messages"] == [
+        {"role": "system", "content": "Trusted top-level prompt."},
+        {"role": "user", "content": "First question."},
+        {"role": "assistant", "content": "First answer.", "thinking_blocks": None},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Use the corrected result."},
+                {"type": "text", "text": "Continue."},
+            ],
+        },
+    ]
+
+
+def test_translate_anthropic_to_openai_folds_midturn_system_keeps_tool_pairing():
+    """
+    A correction arriving before the tool results that answer the pending tool call must not
+    split them: the correction waits and joins the next user turn, so the assistant/tool
+    pairing stays adjacent. A correction with no user turn after it becomes its own user turn.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "claude-haiku-3.6",
+            "max_tokens": 100,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_01234",
+                            "name": "get_weather",
+                            "input": {"location": "Boston"},
+                        }
+                    ],
+                },
+                {"role": "system", "content": "Correction."},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01234",
+                            "content": "Rainy, 55\u00b0F",
+                        }
+                    ],
+                },
+                {"role": "system", "content": "Trailing note."},
+            ],
+        },
+        custom_llm_provider="hosted_vllm",
+    )
+
+    assert openai_request["messages"] == [
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_01234",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Boston"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01234",
+            "content": "Rainy, 55\u00b0F",
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Correction."},
+                {"type": "text", "text": "Trailing note."},
+            ],
+        },
+    ]
+
+
 def _claude_code_user_id(session_id: str) -> str:
     return json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": session_id})
 

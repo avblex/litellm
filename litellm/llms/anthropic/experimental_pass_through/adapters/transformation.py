@@ -881,6 +881,57 @@ class LiteLLMAnthropicMessagesAdapter:
             text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
+    @staticmethod
+    def _system_message_text_parts(content: object) -> list[ChatCompletionTextObject]:
+        if isinstance(content, str):
+            return [ChatCompletionTextObject(type="text", text=content)] if content else []
+        if isinstance(content, list):
+            return [
+                cast(ChatCompletionTextObject, part)
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+            ]
+        return []
+
+    @staticmethod
+    def _merge_text_parts_into_user_message(
+        message: AllMessageValues,
+        text_parts: Sequence[ChatCompletionTextObject],
+    ) -> AllMessageValues:
+        content: object = message.get("content")
+        merged: list[object] = list(text_parts)  # mutable-ok: API message payload
+        if isinstance(content, str):
+            merged.append(ChatCompletionTextObject(type="text", text=content))
+        elif isinstance(content, list):
+            merged.extend(content)
+        return cast(AllMessageValues, {**message, "content": merged})
+
+    def _fold_midturn_system_messages_into_user_messages(
+        self,
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
+        """Fold every non-leading system entry into the user turn that follows it.
+
+        OpenAI-dialect backends such as vLLM chat templates reject a system message that is
+        not first, so the chat-completions bridge keeps an Anthropic mid-turn injection legal
+        by prepending its content to the next user turn. With no user turn after it, the
+        content is emitted in place as its own user turn.
+        """
+        folded: list[AllMessageValues] = []  # mutable-ok: API message payload
+        pending: list[ChatCompletionTextObject] = []  # mutable-ok: API message payload
+        for message in messages:
+            if message["role"] == "system" and folded:
+                pending.extend(self._system_message_text_parts(message.get("content")))
+                continue
+            if pending and message["role"] == "user":
+                folded.append(self._merge_text_parts_into_user_message(message, pending))
+                pending.clear()
+            else:
+                folded.append(message)
+        if pending:
+            folded.append({"role": "user", "content": list(pending)})  # mutable-ok: API message payload
+        return folded
+
     def _add_system_message_to_messages(
         self,
         new_messages: list[AllMessageValues],
@@ -1178,6 +1229,12 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        ## FOLD MID-TURN SYSTEM INTO USER FOR OPENAI-DIALECT BACKENDS
+        # The dispatcher only bridges here when the target has no native /v1/messages
+        # config, so a resolved provider means an OpenAI-dialect backend, where a
+        # non-leading system entry is rejected outright by chat templates such as vLLM's.
+        if custom_llm_provider is not None:
+            new_messages = self._fold_midturn_system_messages_into_user_messages(new_messages)
 
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],
