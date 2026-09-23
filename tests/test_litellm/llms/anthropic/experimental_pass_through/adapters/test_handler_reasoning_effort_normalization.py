@@ -63,6 +63,11 @@ class TestTheNormalizedTierIsTheTierSent:
         there would have sent a level the model map says the model rejects."""
         assert _reasoning_effort_sent("gpt-5.5-pro", "azure", "minimal") == "medium"
 
+    def test_a_tier_outside_the_chains_is_lowered_when_the_entry_refuses_it(self, local_model_cost_map):
+        """chat-latest declares ``medium`` alone, so a caller asking for ``high`` used to get a
+        400 naming the levels the backend takes; the adapter now sends the declared tier."""
+        assert _reasoning_effort_sent("chat-latest", "openai", "high") == "medium"
+
     @pytest.mark.parametrize(
         "model, provider, expected",
         [("kimi-k3", "fireworks_ai", "max"), ("gpt-5-mini", "azure", "high")],
@@ -92,9 +97,7 @@ class TestTheNormalizedTierIsTheTierSent:
             ("us/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
-        self, local_model_cost_map, model, provider
-    ):
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(self, local_model_cost_map, model, provider):
         """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
         say so and the adapter sends the tier below instead of the rejected one."""
         assert _reasoning_effort_sent(model, provider, "max") == "xhigh"

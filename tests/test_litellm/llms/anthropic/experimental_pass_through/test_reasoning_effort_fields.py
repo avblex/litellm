@@ -177,9 +177,7 @@ class TestAdapterAdaptiveThinking:
         )
 
         adapter = LiteLLMAnthropicMessagesAdapter()
-        result = adapter.translate_anthropic_thinking_to_reasoning_effort(
-            {"type": "adaptive"}
-        )
+        result = adapter.translate_anthropic_thinking_to_reasoning_effort({"type": "adaptive"})
         assert result == "medium"
 
     def test_messages_adapter_adaptive_overridden_by_output_config(self):
@@ -331,3 +329,31 @@ class TestADeclarationDisjointFromTheChain:
         what every deployment got before the resolver was consulted. Dropping the parameter outright
         is the real answer and belongs with the callers that build the request."""
         assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == expected
+
+
+class TestATierTheDeclarationExcludes:
+    """A deployment declaring its levels outright can exclude a tier the chains never covered,
+    ``high`` among them, and a caller asking for that tier used to get it verbatim and a 400 naming
+    the levels the backend does take. A refused tier now moves to the nearest rung the declaration
+    allows, dropping toward less thinking before climbing toward more."""
+
+    def test_a_refused_tier_lands_on_the_nearest_declared_rung(self, local_model_cost_map):
+        """The bundled map already carries such an entry: chat-latest declares ``medium`` alone,
+        so a caller asking for ``high`` used to arrive asking for ``high``."""
+        assert normalize_reasoning_effort_value("high", "chat-latest", "openai") == "medium"
+
+    @pytest.mark.parametrize("declared_effort_entry", [("low", "medium", "xhigh")], indirect=True)
+    def test_a_declaration_naming_its_own_default_still_refuses_high(self, declared_effort_entry):
+        """The shape a reseller states outright when its serving layer caps the ladder below
+        ``high``: the nearest accepted rung below the refusal is ``medium``."""
+        assert normalize_reasoning_effort_value("high", declared_effort_entry, "synthetic") == "medium"
+
+    @pytest.mark.parametrize("declared_effort_entry", [("low", "xhigh")], indirect=True)
+    def test_a_refused_tier_drops_before_it_climbs(self, declared_effort_entry):
+        """``low`` and ``xhigh`` both answer, so the tier below the refusal wins; silently thinking
+        harder than the caller asked is the worse of the two mistakes."""
+        assert normalize_reasoning_effort_value("high", declared_effort_entry, "synthetic") == "low"
+
+    @pytest.mark.parametrize("declared_effort_entry", [("medium", "xhigh", "max")], indirect=True)
+    def test_a_refused_floor_climbs_when_nothing_lower_is_declared(self, declared_effort_entry):
+        assert normalize_reasoning_effort_value("low", declared_effort_entry, "synthetic") == "medium"

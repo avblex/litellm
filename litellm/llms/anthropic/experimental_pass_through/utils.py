@@ -20,7 +20,15 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
         "minimal": ("minimal", "low"),
     }
 )
+_EFFORT_LADDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
 _THINKING_OFF: Final = "none"
+
+
+def _nearer_effort_steps(effort: str) -> tuple[str, ...]:
+    """Every other rung of the ladder, lower ones first, so a refused tier drops toward less
+    thinking before it climbs toward more."""
+    index: Final = _EFFORT_LADDER.index(effort)
+    return (*reversed(_EFFORT_LADDER[:index]), *_EFFORT_LADDER[index + 1 :])
 
 
 class _ClaudeCodeUserId(BaseModel):
@@ -72,7 +80,9 @@ def normalize_reasoning_effort_value(
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
-    the proxy advertises is a level this path forwards.
+    the proxy advertises is a level this path forwards. A tier outside the degradation chains is
+    forwarded as asked only when the set says the deployment takes it; one the set excludes is
+    lowered toward less thinking before it is raised toward more.
 
     A deployment that refuses every step of a chain falls back to an accepted level read off that
     same set rather than to an assumed one, since an entry naming its levels outright can exclude
@@ -81,9 +91,9 @@ def normalize_reasoning_effort_value(
     handled where the thinking block is built. A deployment accepting no tier at all keeps the
     chain's floor, which is what every deployment degraded to before there was anything to ask.
     """
-    chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
-    if chain is None:
+    if effort not in _EFFORT_LADDER:
         return effort
+    chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort, (effort,))
 
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import get_model_info
@@ -98,4 +108,7 @@ def normalize_reasoning_effort_value(
         return chain[-1]
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
-    return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+    return next(
+        (level for level in (*chain, *_nearer_effort_steps(effort), *accepted_tiers) if level in supported),
+        chain[-1],
+    )
