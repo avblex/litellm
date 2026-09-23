@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  nginx:
+    build: ./nginx          # собираем из собственного Dockerfile
+    ports:
+      - "443:443"           # HTTPS → 443
+    volumes:
+      # Прокинутый конфиг и сертификаты (можно убрать, если они уже в образе)
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/cert:/etc/nginx/cert:ro
+    restart: unless-stopped
+
+

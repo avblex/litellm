@@ -974,7 +974,7 @@ def _merge_sso_token_claims(
 
 
 async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
-    """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
+    """Free tier allows SSO for up to 50 billable users; beyond that requires an Enterprise license."""
     if premium_user is True:
         return
     if prisma_client is None:
@@ -985,9 +985,9 @@ async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_clien
             code=status.HTTP_403_FORBIDDEN,
         )
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
-    if billable_users and billable_users > 5:
+    if billable_users and billable_users > 50:
         raise ProxyException(
-            message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You configured SSO (one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML) in your env. Please unset it",
+            message="You must be a LiteLLM Enterprise user to use SSO for more than 50 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You configured SSO (one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML) in your env. Please unset it",
             type=ProxyErrorTypes.auth_error,
             param="premium_user",
             code=status.HTTP_403_FORBIDDEN,

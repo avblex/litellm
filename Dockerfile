@@ -1,14 +1,16 @@
 # syntax=docker/dockerfile:1.7
 
-# Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
+# Base image for building. Debian instead of Chainguard wolfi-base: the Chainguard
+# apk repo requires an authenticated subscription (403 Forbidden), and its musl libc
+# is incompatible with glibc-linked wheels like pyroscope-io.
+ARG LITELLM_BUILD_IMAGE=debian:trixie-slim
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
+ARG LITELLM_RUNTIME_IMAGE=debian:trixie-slim
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 # Pinned by digest like the other base images; bump explicitly on Node upgrades.
 ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
-# Checksum from https://www.pgbouncer.org/downloads/ (the Wolfi repo only carries 1.24.x)
+# Checksum from https://www.pgbouncer.org/downloads/
 ARG PGBOUNCER_VERSION=1.25.2
 ARG PGBOUNCER_SHA256=924ad35113fd0a71c8e2dbe85b5d03445532e2b7b37a9f8a48983beea238b332
 
@@ -18,7 +20,14 @@ FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
 ARG PGBOUNCER_VERSION
 ARG PGBOUNCER_SHA256
 USER root
-RUN apk add --no-cache build-base pkgconf libevent-dev openssl-dev curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkgconf \
+    libevent-dev \
+    libssl-dev \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${PGBOUNCER_VERSION}/pgbouncer-${PGBOUNCER_VERSION}.tar.gz" && \
     echo "${PGBOUNCER_SHA256}  pgbouncer.tar.gz" | sha256sum -c - && \
@@ -53,22 +62,32 @@ USER root
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
+    curl \
     gcc \
-    python-3.13 \
-    python-3.13-dev \
-    rust \
+    g++ \
+    python3 \
+    python3-dev \
     openssl \
-    openssl-dev \
+    libssl-dev \
     nodejs \
     npm \
-    libsndfile
+    libsndfile1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# rust-toolchain.toml pins the toolchain the crates require; apt's rustc is too old
+COPY rust-toolchain.toml ./
+RUN curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh && \
+    sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none && \
+    rm /tmp/rustup-init.sh && \
+    . "$HOME/.cargo/env" && \
+    rustup toolchain install --no-self-update
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
-    PATH="/app/.venv/bin:${PATH}"
+    PATH="/root/.cargo/bin:/app/.venv/bin:${PATH}"
 
 # Copy dependency metadata first for layer caching
 COPY pyproject.toml uv.lock ./
@@ -83,7 +102,7 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra semantic-router \
     --extra saml \
     --extra bedrock-realtime \
-    --python python3.13
+    --python python3
 
 # Copy full source tree
 COPY . .
@@ -105,7 +124,7 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra semantic-router \
     --extra saml \
     --extra bedrock-realtime \
-    --python python3.13
+    --python python3
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -119,14 +138,18 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
-# The base image only configures Chainguard's authenticated apk repo, which
-# requires an enterprise subscription. Add the public Wolfi repo so `apk add`
-# also works for anyone installing extra packages into a running container.
-# https://github.com/BerriAI/litellm/issues/33518
-RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
-
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile libevent
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    libssl3 \
+    openssl \
+    tzdata \
+    nodejs \
+    python3 \
+    libsndfile1 \
+    libevent-2.1-7 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
@@ -156,8 +179,7 @@ COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 # database needs no npm and no network access (#33650, #24554).
 COPY --from=builder /opt/prisma /opt/prisma
 
-RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
-    find /app/.venv -type d -path "*/tornado/test" -delete && \
+RUN rm -rf /app/.venv/lib/python3*/site-packages/tornado/test && \
     chmod -R a+rX /opt/prisma && \
     test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \

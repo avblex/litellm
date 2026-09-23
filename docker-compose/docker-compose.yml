@@ -1,0 +1,53 @@
+services:
+  litellm:
+    container_name: litellm
+    image: registry.usetech.ru/abelsky/litellm:${LITELLM_VER:-1.102.0}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - "--config=/app/config.yaml"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+      - ./hooks/litellm_hooks.py:/app/litellm_hooks.py
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://litellm:password@litellm-db:5432/litellm}
+      MAX_STRING_LENGTH_PROMPT_IN_DB: "50000"
+      #STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+      SEARXNG_API_BASE: ${SEARXNG_API_BASE:-http://searxng:8080}
+      PYTHONPATH: /app
+    env_file:
+      - .env
+    depends_on:
+      - db
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:4000/health/liveliness || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  db:
+    container_name: litellm-db
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - litellm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U litellm"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  litellm_postgres_data:
+    driver: local

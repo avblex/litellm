@@ -1,0 +1,48 @@
+model_list:
+
+  - model_name: bge-m3
+    litellm_params:
+      model: hosted_vllm/bge-m3
+      api_base: "http://ai-host:8004/v1"
+      api_key: os.environ/VLLM_API_KEY
+      max_tokens: 8192
+
+  - model_name: tts-1
+    litellm_params:
+      model: openai/tts-1
+      api_base: "http://ai-host:8003/v1"
+      api_key: os.environ/TTS_API_KEY
+
+router_settings:
+  routing_strategy: least-busy
+  num_retries: 1
+  request_timeout: 300
+  cooldown_time: 30
+
+general_settings:
+  # Optional: Set global settings like timeouts
+  # 5 minutes
+  timeout: 300
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
+  # forward_client_headers_to_llm_api: true
+  cancel_on_disconnect: true
+
+litellm_settings:
+  callbacks:
+    - litellm_hooks.proxy_handler_instance
+    - websearch_interception
+  websearch_interception_params:
+    enabled_providers:
+      - openai
+      - anthropic
+      - hosted_vllm
+      - ollama
+      - vllm
+    search_tool_name: searxng-search
+ 
+search_tools:
+  - search_tool_name: searxng-search
+    litellm_params:
+      search_provider: searxng
+      api_base: http://host.docker.internal:8080
