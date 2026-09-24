@@ -3922,11 +3922,21 @@ class Logging(LiteLLMLoggingBaseClass):
 
         - For Non-streaming responses, we need to transform the response to a ModelResponse object.
         - For streaming responses, anthropic_messages handler calls success_handler with a assembled ModelResponse.
+        - WebSearch interception and the MCP gateway answer a streaming request from a
+          non-streaming call, handing the caller a FakeAnthropicMessagesStreamIterator; the
+          response it carries is what the row is built from.
         """
         import httpx
 
         if self.stream and isinstance(result, ModelResponse) or isinstance(result, ModelResponse):
             return result
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+
+        if isinstance(result, FakeAnthropicMessagesStreamIterator):
+            result = result.response
 
         if isinstance(
             result,

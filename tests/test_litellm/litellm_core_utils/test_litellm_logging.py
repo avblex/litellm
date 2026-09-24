@@ -4520,6 +4520,40 @@ def test_handle_anthropic_messages_response_logging_passes_model_response_throug
     assert logging_obj._handle_anthropic_messages_response_logging(result=model_response) is model_response
 
 
+def test_handle_anthropic_messages_response_logging_unwraps_the_fake_stream_iterator():
+    """WebSearch interception and the MCP gateway answer a streaming /v1/messages request
+    from a non-streaming call, handing the caller a FakeAnthropicMessagesStreamIterator. The
+    row used to be dropped with a pydantic model_type error naming that iterator; it must be
+    built from the response the iterator carries instead."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+    wrapped = FakeAnthropicMessagesStreamIterator(
+        AnthropicMessagesResponse(
+            id="msg_fake_1",
+            type="message",
+            role="assistant",
+            model="claude-sonnet-3.8",
+            content=[{"type": "text", "text": "searched answer"}],
+            stop_reason="end_turn",
+            stop_sequence=None,
+            usage={"input_tokens": 9, "output_tokens": 5},
+        )
+    )
+
+    result = logging_obj._handle_anthropic_messages_response_logging(result=wrapped)
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_fake_1"
+    assert result.choices[0].message.content == "searched answer"  # type: ignore[union-attr]
+    assert result.usage.prompt_tokens == 9  # type: ignore[attr-defined]
+    assert result.usage.completion_tokens == 5  # type: ignore[attr-defined]
+
+
 def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_responses_payload():
     """If the Responses translation raises (eg. empty output on an incomplete response),
     the row must still land: a minimal ModelResponse with model + usage is returned."""
