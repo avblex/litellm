@@ -31,6 +31,7 @@ general_settings:
 litellm_settings:
   callbacks:
     - litellm_hooks.proxy_handler_instance
+    - custom_tokenizer_patch._loader_instance
     - websearch_interception
   websearch_interception_params:
     enabled_providers:
