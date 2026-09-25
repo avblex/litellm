@@ -26,6 +26,7 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.token_counter import PreCallTokenCounts
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
@@ -4288,7 +4289,7 @@ def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
             model="m",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "hi"}],
-            input_token_count=1000,
+            input_token_count=PreCallTokenCounts(total=1000, without_thinking=1000),
         )
 
     assert calls == []
@@ -4335,7 +4336,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
     )
 
     assert len(result) == 1
-    assert counts_passed_in == [42]
+    assert counts_passed_in == [PreCallTokenCounts(total=42, without_thinking=42)]
     assert len(counting_threads) == 1
     assert counting_threads[0] is not threading.current_thread()
 
@@ -4498,7 +4499,7 @@ async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypat
     ran.append("count")
     await task
 
-    assert count is not None and count > 0
+    assert count is not None and count.total > 0
     assert ran == ["competitor", "count"]
 
 
@@ -4612,10 +4613,10 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
     with_instructions_tokens = router._count_pre_call_check_tokens(
         messages=None, input=short_input, request_kwargs={"instructions": long_instructions}
     )
-    assert with_instructions_tokens > input_only_tokens
+    assert with_instructions_tokens.total > input_only_tokens.total
 
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens.total}
     )
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(
@@ -4684,7 +4685,7 @@ def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwarg
 
     prompt_only_tokens = router._count_pre_call_check_tokens(
         messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
-    )
+    ).total
     monkeypatch.setattr(
         router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
     )
@@ -4726,7 +4727,7 @@ def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
     ]
     messages = [{"role": "user", "content": "hi"}]
 
-    messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None)
+    messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None).total
     monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)) == 1
@@ -4803,12 +4804,175 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
         messages=None, input=[{"role": "user", "content": "hello world"}]
     )
 
-    assert messages_tokens > 0
-    assert string_input_tokens > 0
-    assert list_input_tokens > 0
+    assert messages_tokens.total > 0
+    assert string_input_tokens.total > 0
+    assert list_input_tokens.total > 0
 
     with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
         router._count_pre_call_check_tokens(messages=None, input=None)
+
+
+def test_count_pre_call_check_tokens_splits_anthropic_thinking():
+    """
+    A request carrying thinking blocks must report the full prompt and the prompt without
+    them, so a deployment the bridge strips thinking for is not judged by the inflated
+    number. `redacted_thinking` counts toward the total instead of breaking the count, and
+    a request without thinking blocks reports the same number twice.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+    )
+
+    with_thinking = router._count_pre_call_check_tokens(
+        messages=[
+            {"role": "user", "content": "hello world"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "step by step " * 30, "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "Zm9vYmFy" * 20},
+                    {"type": "text", "text": "the answer"},
+                ],
+            },
+        ],
+        input=None,
+    )
+    text_only = router._count_pre_call_check_tokens(
+        messages=[
+            {"role": "user", "content": "hello world"},
+            {"role": "assistant", "content": [{"type": "text", "text": "the answer"}]},
+        ],
+        input=None,
+    )
+
+    assert with_thinking.total > with_thinking.without_thinking
+    assert with_thinking.without_thinking == text_only.total
+    assert text_only.total == text_only.without_thinking
+    assert with_thinking.total > text_only.total + 10  # the redacted payload counts toward the total
+
+
+def test_pre_call_checks_skips_thinking_for_bridge_deployments(monkeypatch):
+    """
+    Regression: /v1/messages traffic with assistant thinking history against a chat backend
+    (e.g. vLLM) must not be rejected for a prompt that only exceeds the context window once
+    the never-sent thinking blocks are counted. The same request against a native Messages
+    deployment, which does send thinking, must still be rejected.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "vllm/qwen3-max", "api_base": "http://x"}},
+            {"model_name": "m", "litellm_params": {"model": "anthropic/claude-opus-4-5", "api_key": "x"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "long chain of thought " * 60, "signature": "sig"},
+                {"type": "text", "text": "ok"},
+            ],
+        },
+    ]
+    without_thinking_tokens = router._count_pre_call_check_tokens(messages=messages, input=None).without_thinking
+
+    def fake_model_info(deployment=None, **kwargs):
+        return {"max_input_tokens": without_thinking_tokens, **(deployment or {}).get("model_info", {})}
+
+    monkeypatch.setattr(router, "get_router_model_info", fake_model_info)
+
+    deployments = [
+        {
+            "litellm_params": {"model": "vllm/qwen3-max", "api_base": "http://x"},
+            "model_info": {"id": "bridge", "litellm_provider": "vllm", "key": "vllm/qwen3-max"},
+        },
+        {
+            "litellm_params": {"model": "anthropic/claude-opus-4-5", "api_key": "x"},
+            "model_info": {"id": "native", "litellm_provider": "anthropic", "key": "claude-opus-4-5"},
+        },
+    ]
+    kept = router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)
+
+    assert [d["model_info"]["id"] for d in kept] == ["bridge"]
+
+
+def test_pre_call_checks_counts_thinking_for_messages_passthrough_deployments(monkeypatch):
+    """
+    A deployment opting into /v1/messages passthrough forwards thinking blocks verbatim, so
+    its context-window check keeps counting them and the oversized request is filtered.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "long chain of thought " * 60, "signature": "sig"},
+                {"type": "text", "text": "ok"},
+            ],
+        }
+    ]
+    counts = router._count_pre_call_check_tokens(messages=messages, input=None)
+
+    def fake_model_info(deployment=None, **kwargs):
+        return {"max_input_tokens": counts.without_thinking, **(deployment or {}).get("model_info", {})}
+
+    monkeypatch.setattr(router, "get_router_model_info", fake_model_info)
+
+    deployments = [
+        {
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+            "model_info": {
+                "id": "passthrough",
+                "litellm_provider": "openai",
+                "key": "gpt-4o",
+                "supported_endpoints": ["/v1/chat/completions", "/v1/messages"],
+            },
+        },
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)
+
+
+@pytest.mark.asyncio
+async def test_aanthropic_messages_allows_oversized_thinking_for_bridge_deployments():
+    """
+    End-to-end router regression: /v1/messages against a mock vLLM-style deployment whose
+    context window only the thinking-inflated count exceeds must dispatch instead of raising
+    ContextWindowExceededError.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-group",
+                "litellm_params": {"model": "vllm/qwen3-max", "api_base": "http://x", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 30},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "long chain of thought " * 60, "signature": "sig"},
+                {"type": "text", "text": "ok"},
+            ],
+        },
+    ]
+
+    response = await router.aanthropic_messages(model="vllm-group", messages=messages, max_tokens=5)
+    assert response is not None
 
 
 def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
