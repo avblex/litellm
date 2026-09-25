@@ -11276,6 +11276,48 @@ class TestModelGroupAliasReachesPreRoutingStrategies:
             )
 
 
+@pytest.mark.asyncio
+async def test_context_window_fallback_resolves_through_a_model_group_alias():
+    """
+    Regression: a request sent to a `model_group_alias` must fall back on the chain configured
+    for the aliased group. The fallback lookup keyed on the requested name only, so an oversized
+    prompt against an alias raised ContextWindowExceededError with no fallback even though the
+    target group had a context_window_fallbacks entry.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "fast",
+                "litellm_params": {
+                    "model": "vllm/qwen3-max",
+                    "api_base": "http://x",
+                    "mock_response": "from fast",
+                },
+                "model_info": {"max_input_tokens": 100},
+            },
+            {
+                "model_name": "long",
+                "litellm_params": {
+                    "model": "vllm/qwen3-max",
+                    "api_base": "http://x",
+                    "mock_response": "from long",
+                },
+                "model_info": {"max_input_tokens": 100_000},
+            },
+        ],
+        model_group_alias={"alias": "fast"},
+        enable_pre_call_checks=True,
+        context_window_fallbacks=[{"fast": ["long"]}],
+    )
+
+    response = await router.acompletion(
+        model="alias",
+        messages=[{"role": "user", "content": "word " * 500}],
+    )
+
+    assert response.choices[0].message.content == "from long"
+
+
 class TestTeamPublicNameReachesPreRoutingStrategies:
     """A team-scoped strategy router is stored under an internal `model_name_{team}_{uuid}` with the
     caller-facing name in `model_info.team_public_model_name`, and the four registries key on that

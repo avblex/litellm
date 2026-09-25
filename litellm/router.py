@@ -7325,7 +7325,7 @@ class Router:
         original_model_group: Final[str | None] = kwargs.get("model")
         # A pre-routing hook (complexity / auto / adaptive / quality routers) picks a tier
         # behind the router name, and fallbacks are configured per tier, not per router.
-        lookup_groups: Final[tuple[str, ...]] = fallback_lookup_groups(kwargs, model_group)
+        lookup_groups: Final[tuple[str, ...]] = self._fallback_lookup_groups(kwargs, model_group)
         fallback_failure_exception_str = ""
 
         if disable_fallbacks is True or original_model_group is None:
@@ -7996,6 +7996,15 @@ class Router:
         """
         return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)
 
+    def _fallback_lookup_groups(self, kwargs: Mapping[str, object], model_group: str | None) -> tuple[str, ...]:
+        """`fallback_lookup_groups` plus the target of a `model_group_alias`, so a request
+        sent to an alias resolves the fallback chain configured for the aliased group."""
+        groups: Final = fallback_lookup_groups(kwargs, model_group)
+        alias_target: Final = self._get_model_from_alias(model_group) if model_group is not None else None
+        if alias_target is None or alias_target in groups:
+            return groups
+        return (*groups, alias_target)
+
     def _get_fallback_model_group_from_fallbacks(
         self,
         fallbacks: list[dict[str, list[str]]],
@@ -8462,7 +8471,7 @@ class Router:
             return (
                 self._get_fallback_model_group_for_lookup_groups(
                     fallbacks=content_policy_fallbacks,
-                    lookup_groups=fallback_lookup_groups(kwargs, model_group),
+                    lookup_groups=self._fallback_lookup_groups(kwargs, model_group),
                 )
                 is not None
             )
@@ -8494,7 +8503,7 @@ class Router:
             return False
         resolved, _ = get_fallback_model_group_for_lookup_groups(
             fallbacks=fallbacks,
-            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+            lookup_groups=self._fallback_lookup_groups(kwargs, model_group),
         )
         return resolved is not None
 
