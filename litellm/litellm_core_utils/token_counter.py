@@ -4,6 +4,7 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final, Literal, cast
 
 import anyio
@@ -46,6 +47,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
@@ -358,6 +360,48 @@ def offload_token_count(
     return offloaded
 
 
+@dataclass(frozen=True, slots=True)
+class PreCallTokenCounts:
+    """Input-token estimates for the context-window pre-call check.
+
+    ``without_thinking`` excludes Anthropic ``thinking`` blocks, which the Messages-to-chat
+    bridge moves to ``reasoning_content``/``thinking_blocks`` and chat backends keep out of the
+    prompt, so a deployment that does not receive the payload natively must be compared against it.
+    """
+
+    total: int
+    without_thinking: int
+
+
+ANTHROPIC_THINKING_BLOCK_TYPES: Final = ("thinking", "redacted_thinking")
+
+
+def without_anthropic_thinking_blocks(
+    messages: Sequence[AllMessageValues],
+) -> tuple[Sequence[AllMessageValues], bool]:
+    """Copy `messages` with `thinking`/`redacted_thinking` content blocks dropped.
+
+    Returns the copy and whether any block was dropped; a list with no thinking blocks is
+    returned as-is so callers can skip a second count.
+    """
+
+    def strip(message: AllMessageValues) -> tuple[AllMessageValues, bool]:
+        content: Final = message.get("content")
+        if not isinstance(content, list) or not any(
+            isinstance(block, Mapping) and block.get("type") in ANTHROPIC_THINKING_BLOCK_TYPES for block in content
+        ):
+            return message, False
+        kept: Final = [
+            block
+            for block in content
+            if not (isinstance(block, Mapping) and block.get("type") in ANTHROPIC_THINKING_BLOCK_TYPES)
+        ]
+        return cast(AllMessageValues, {**message, "content": kept}), True  # cast-ok: copy keeps message shape
+
+    stripped: Final = tuple(strip(message) for message in messages)
+    return [message for message, _ in stripped], any(removed for _, removed in stripped)
+
+
 def _get_tiktoken_count_function(
     encode_length: Callable[[str], int],
     chunk_size: int = TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
@@ -400,7 +444,7 @@ def token_counter(
     text: str | list[str] | None = None,
     messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
-    tools: list[ChatCompletionToolParam] | None = None,
+    tools: Sequence[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
@@ -546,7 +590,7 @@ def _count_messages(
 
 def _count_extra(
     count_function: TokenCounterFunction,
-    tools: list[ChatCompletionToolParam] | None,
+    tools: Sequence[ChatCompletionToolParam] | None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None,
     includes_system_message: bool,
 ) -> int:
@@ -857,6 +901,7 @@ def _count_content_list(
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
+        | ChatCompletionRedactedThinkingBlock
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -898,10 +943,10 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] == "thinking":
-                # Claude extended thinking content block
-                # Count the thinking text and skip signature (opaque signature blob)
-                thinking_text = str(c.get("thinking", ""))
+            elif c["type"] in ("thinking", "redacted_thinking"):
+                # Claude extended thinking: count the thinking text (or the opaque redacted
+                # payload) and skip the signature blob
+                thinking_text = str(c.get("thinking") or c.get("data") or "")
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
             elif c["type"] == "tool_reference":
@@ -920,7 +965,8 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, "
+                    f"redacted_thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

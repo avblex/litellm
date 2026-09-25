@@ -24,9 +24,10 @@ under-count a mixed group.
   message list with `thinking` and `redacted_thinking` blocks removed from `content` lists, and
   whether any were removed. Messages without such blocks (and non-dict messages) pass through
   unchanged.
-- `_count_content_list` gains a `redacted_thinking` branch counting `str(data)`. Today an
-  unhandled `redacted_thinking` block raises `ValueError`, which the router swallows and returns
-  deployments unfiltered, so the whole pre-call check silently no-ops on such requests.
+- `_count_content_list` counts `redacted_thinking` blocks by their `data` payload, sharing the
+  branch with `thinking`. Today an unhandled `redacted_thinking` block raises `ValueError`,
+  which the router swallows and returns deployments unfiltered, so the whole pre-call check
+  silently no-ops on such requests.
 
 ### router.py
 

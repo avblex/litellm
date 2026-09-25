@@ -99,7 +99,11 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import (
+    PreCallTokenCounts,
+    offload_token_count,
+    without_anthropic_thinking_blocks,
+)
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -682,6 +686,22 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def _pre_call_token_counts(
+    counted_messages: Sequence[AllMessageValues],
+    tools: Sequence[ChatCompletionToolParam] | None,
+) -> PreCallTokenCounts:
+    """Count the prompt with and without Anthropic thinking blocks, skipping the second
+    count when the request carries none."""
+    total: Final = litellm.token_counter(messages=counted_messages, tools=tools)
+    stripped, removed = without_anthropic_thinking_blocks(counted_messages)
+    if not removed:
+        return PreCallTokenCounts(total=total, without_thinking=total)
+    return PreCallTokenCounts(
+        total=total,
+        without_thinking=litellm.token_counter(messages=stripped, tools=tools),
+    )
 
 
 class Router:
@@ -12091,7 +12111,7 @@ class Router:
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: Mapping[str, object] | None = None,
-    ) -> int:
+    ) -> PreCallTokenCounts:
         """
         Count input tokens for context-window pre-call checks.
 
@@ -12104,6 +12124,10 @@ class Router:
         Prompt content the message list never carries is read from `request_kwargs`:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
+
+        Returns the count twice when the request carries no Anthropic thinking blocks, and
+        once with and once without them otherwise, so `_pre_call_checks` can compare each
+        deployment against the estimate for what it actually puts in its prompt.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             anthropic_system_to_openai_message,
@@ -12121,7 +12145,10 @@ class Router:
         system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
-            return litellm.token_counter(messages=counted_messages, tools=tools)
+            return _pre_call_token_counts(
+                cast(list[AllMessageValues], counted_messages),  # cast-ok: message-shaped dicts
+                tools,
+            )
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -12134,11 +12161,41 @@ class Router:
                 input=typed_input,
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
             )
-            return litellm.token_counter(
-                messages=cast(list, input_messages),  # cast-ok: transformed chat messages
-                tools=tools,
+            return _pre_call_token_counts(
+                cast(list[AllMessageValues], input_messages),  # cast-ok: transformed chat messages
+                tools,
             )
         raise ValueError("Either messages or input must be provided to count tokens")
+
+    @staticmethod
+    def _deployment_receives_anthropic_thinking(model_info: Mapping[str, object]) -> bool:
+        """Whether the deployment's backend gets Anthropic thinking blocks in its prompt.
+
+        True for providers with a native Messages API config, deployments opting into
+        `/v1/messages` passthrough, and models declared to accept the Anthropic thinking
+        payload. Anything unresolvable is treated as True so the estimate stays on the safe
+        (over-counting) side, matching the behavior before thinking was discounted.
+        """
+        supported_endpoints: Final = model_info.get("supported_endpoints")
+        if isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints:
+            return True
+        raw_provider: Final = model_info.get("litellm_provider")
+        model: Final = model_info.get("key")
+        if not isinstance(raw_provider, str) or not isinstance(model, str):
+            return True
+        bare_model: Final = model.removeprefix(f"{raw_provider}/")
+        try:
+            provider: Final = LlmProviders(raw_provider)
+        except ValueError:
+            return True
+        from litellm.utils import ProviderConfigManager, supports_anthropic_thinking_payload
+
+        if ProviderConfigManager.get_provider_anthropic_messages_config(model=bare_model, provider=provider):
+            return True
+        try:
+            return supports_anthropic_thinking_payload(model=bare_model, custom_llm_provider=raw_provider)
+        except Exception:  # noqa: BLE001  # best-effort: an unresolvable capability check keeps the safe count
+            return True
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
         """The deployment's declared context window, or None when it declares none or cannot be resolved."""
@@ -12174,7 +12231,7 @@ class Router:
         messages: Sequence[Mapping[str, str]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
-    ) -> int | None:
+    ) -> PreCallTokenCounts | None:
         """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
 
         Returns None when no deployment limits its context window, and when counting fails. The
@@ -12204,7 +12261,7 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
-        input_token_count: int | None = None,
+        input_token_count: PreCallTokenCounts | None = None,
         skip_inline_token_count: bool = False,
     ):
         """
@@ -12229,7 +12286,9 @@ class Router:
         # at most once; for model groups with no context-window limit it is skipped.
         # Async callers pass the count in, already computed off the event loop, and set
         # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
-        input_tokens: int | None = input_token_count
+        # Each deployment is compared against the half of the pair matching what it puts in
+        # its own prompt: thinking blocks reach native Messages backends, chat bridges drop them.
+        token_counts: PreCallTokenCounts | None = input_token_count
 
         _context_window_error = False
         _potential_error_str = ""
@@ -12261,11 +12320,11 @@ class Router:
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
-                    if input_tokens is None:
+                    if token_counts is None:
                         if skip_inline_token_count:
                             return _returned_deployments
                         try:
-                            input_tokens = self._count_pre_call_check_tokens(
+                            token_counts = self._count_pre_call_check_tokens(
                                 messages=messages, input=input, request_kwargs=request_kwargs
                             )
                         except Exception as e:
@@ -12274,11 +12333,17 @@ class Router:
                                 e,
                             )
                             return _returned_deployments
-                    if input_tokens > max_input_tokens:
+                    deployment_input_tokens = (
+                        token_counts.total
+                        if self._deployment_receives_anthropic_thinking(model_info)
+                        else token_counts.without_thinking
+                    )
+                    if deployment_input_tokens > max_input_tokens:
                         invalid_model_indices.add(idx)
                         _context_window_error = True
                         _potential_error_str += (
-                            f"Model={_deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
+                            f"Model={_deployment_model}, Max Input Tokens={max_input_tokens}, "
+                            f"Got={deployment_input_tokens}"
                         )
                         continue
             except Exception as e:
