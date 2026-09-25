@@ -10,6 +10,8 @@ services:
     volumes:
       - ./litellm_config.yaml:/app/config.yaml
       - ./hooks/litellm_hooks.py:/app/litellm_hooks.py
+      - ./hooks/custom_tokenizer_patch.py:/app/custom_tokenizer_patch.py:ro
+      - ./hooks/tokenizer.json:/app/tokenizer.json:ro
     ports:
       - "4000:4000"
     environment:
