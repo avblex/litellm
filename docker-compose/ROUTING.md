@@ -95,6 +95,34 @@ qwen3.8-flash-long`, `Selected deployment: {'model_name': 'qwen3.8-flash-long', 
 показывает backend-имя, оно у обеих групп общее). Короткий запрос должен оставаться на
 fast без строк fallback
 
+Проверка формата `/v1/messages` с thinking-блоком. Промпт из thinking на ~80k токенов и
+короткого текста: мост перекладывает thinking в `reasoning_content`, vLLM их в промпт не
+кладет, поэтому pre-call check должен сравнить с лимитом число без thinking и оставить
+запрос на fast. Без правки в логе был бы `Got=~80000` и fallback на long
+
+```bash
+python3 -c "
+import json
+print(json.dumps({'model': 'qwen3.8-flash-fast',
+                  'messages': [{'role': 'user', 'content': 'hi'},
+                               {'role': 'assistant',
+                                'content': [{'type': 'thinking',
+                                             'thinking': 'думаем ' * 40000,
+                                             'signature': 'sig'},
+                                            {'type': 'text', 'text': 'ок'}]}],
+                  'max_tokens': 16}))" > /tmp/req_messages.json
+
+curl -s http://localhost:4000/v1/messages \
+  -H "Authorization: Bearer $USER_KEY" -H "Content-Type: application/json" \
+  -d @/tmp/req_messages.json > /dev/null
+
+grep -E "Max Input Tokens|Falling back|Selected deployment" litellm.log | tail -3
+```
+
+Ожидаем: короткое `Got=` (несколько токенов, text + служебные), без строк fallback,
+`Selected deployment` с fast-деплойментом. Для сравнения тот же объем в обычном текстовом
+`content` (не thinking) обязан дать `Got=~80000` и уйти на long
+
 ## 6. KV-бюджет vLLM
 
 Расчёт от "GPU KV cache size" из логов старта vLLM (для MGU4 ~2.9M токенов):
