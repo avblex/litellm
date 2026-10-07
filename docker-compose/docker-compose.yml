@@ -40,7 +40,7 @@ services:
 
   db:
     container_name: litellm-db
-    image: postgres:16
+    image: postgres:16.14
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
