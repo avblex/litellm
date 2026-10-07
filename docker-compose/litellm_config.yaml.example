@@ -36,6 +36,7 @@ general_settings:
   disable_env_credential_login: true
 
 litellm_settings:
+  cache: true  # shared state across workers via REDIS_URL from the environment
   callbacks:
     - litellm_hooks.proxy_handler_instance
     - websearch_interception
