@@ -18,6 +18,7 @@ router_settings:
   num_retries: 1
   request_timeout: 300
   cooldown_time: 30
+  enable_pre_call_checks: true
 
 general_settings:
   # Optional: Set global settings like timeouts
@@ -27,12 +28,13 @@ general_settings:
   store_prompts_in_spend_logs: true
   # forward_client_headers_to_llm_api: true
   cancel_on_disconnect: true
+  disable_env_credential_login: true
 
 litellm_settings:
   callbacks:
     - litellm_hooks.proxy_handler_instance
-    - custom_tokenizer_patch._loader_instance
     - websearch_interception
+    - custom_tokenizer_patch._loader_instance
   websearch_interception_params:
     enabled_providers:
       - openai
@@ -41,9 +43,9 @@ litellm_settings:
       - ollama
       - vllm
     search_tool_name: searxng-search
- 
+
 search_tools:
   - search_tool_name: searxng-search
     litellm_params:
       search_provider: searxng
-      api_base: http://host.docker.internal:8080
+      api_base: http://searxng:8080
