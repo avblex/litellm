@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile
     command:
       - "--config=/app/config.yaml"
+      - "--prometheus_metrics_port"
+      - "4001"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml
       - ./hooks/litellm_hooks.py:/app/litellm_hooks.py
@@ -14,9 +16,10 @@ services:
       - ./hooks/tokenizer.json:/app/tokenizer.json:ro
     ports:
       - "4000:4000"
+      - "4001:4001"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://litellm:password@litellm-db:5432/litellm}
-      MAX_STRING_LENGTH_PROMPT_IN_DB: "50000"
+      MAX_STRING_LENGTH_PROMPT_IN_DB: ${MAX_STRING_LENGTH_PROMPT_IN_DB:-50000}
       #STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
       # SEARXNG_API_BASE: ${SEARXNG_API_BASE:-http://searxng:8080}
       PYTHONPATH: /app
@@ -37,7 +40,7 @@ services:
 
   db:
     container_name: litellm-db
-    image: postgres:16
+    image: postgres:16.14
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm

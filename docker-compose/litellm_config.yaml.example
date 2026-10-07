@@ -1,17 +1,22 @@
 model_list:
-
   - model_name: bge-m3
     litellm_params:
       model: hosted_vllm/bge-m3
       api_base: "http://ai-host:8004/v1"
       api_key: os.environ/VLLM_API_KEY
       max_tokens: 8192
+    model_info:
+      input_cost_per_token: 0.00000008   # $0.08 / 1M токенов
+      output_cost_per_token: 0.0
 
   - model_name: tts-1
     litellm_params:
       model: openai/tts-1
       api_base: "http://ai-host:8003/v1"
       api_key: os.environ/TTS_API_KEY
+    model_info:
+      input_cost_per_character: 0.000015  # $0.15 / 10k символов, как у OpenAI tts-1
+      output_cost_per_character: 0.0
 
 router_settings:
   routing_strategy: least-busy
@@ -35,6 +40,7 @@ litellm_settings:
     - litellm_hooks.proxy_handler_instance
     - websearch_interception
     - custom_tokenizer_patch._loader_instance
+    - prometheus
   websearch_interception_params:
     enabled_providers:
       - openai

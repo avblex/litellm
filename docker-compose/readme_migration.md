@@ -44,13 +44,28 @@ docker exec litellm sh -c 'env | grep -E "LITELLM_SALT_KEY|MASTER_KEY"'
 ```bash
 docker compose up -d
 # на старом хосте (без логов):
-docker compose exec db pg_dump -U litellm -d litellm  --exclude-table-data='public."LiteLLM_SpendLogs"' > litellm_dump.sql
+docker compose exec db pg_dump -U litellm -d litellm --clean --if-exists --exclude-table-data='public."LiteLLM_SpendLogs"' > litellm_dump.sql
 # или вместе с логами:
-docker compose exec db pg_dump -U litellm -d litellm  > litellm_dump_full.sql
-# pg_dump со старого хоста:
-docker exec -i litellm-db pg_restore -U litellm -d litellm --clean --if-exists < litellm.dump
+docker compose exec db pg_dump -U litellm -d litellm --clean --if-exists > litellm_dump_full.sql
+# перенести файл на новый хост и восстановить (plain SQL -> psql, не pg_restore):
+docker compose exec -T db psql -U litellm -d litellm < litellm_dump.sql
 docker restart litellm
 ```
+
+`pg_restore` нужен только для дампов в формате custom/directory (`pg_dump -Fc`);
+для plain SQL он печатает "input file appears to be a text format dump. Please
+use psql". Если хочется `pg_restore`, дамп надо снимать с `-Fc` и восстанавливать
+`pg_restore -U litellm -d litellm --clean --if-exists litellm_dump.dump`.
+`--clean --if-exists` в дамп-команде означает, что при восстановлении старые
+объекты будут удалены и пересозданы, а не наложены поверх
+
+Образ БД в docker-compose.yml пинится минорной версией (`image: postgres:16.14`),
+тег `postgres:16` на разных хостах резолвится в разные миноры. Симптом перекоса:
+дамп со старого хоста (pg_dump 16.14) восстанавливается psql 16.9 и в конце печатает
+`invalid command \unrestrict` — новые pg_dump оборачивают дамп в meta-команды
+`\restrict`/`\unrestrict`, а psql старше февральских минорных релизов их не знает.
+Сама база при этом восстанавливается полностью (команда в самом конце файла), но
+версии лучше держать совпадающими: `docker compose pull db` после пиннинга
 
 ### 3. Поправить `proxy_base_url` в SSO-конфиге (главный пункт)
 
@@ -66,6 +81,7 @@ LiteLLM внутри контейнера (ключ возьмёт из окру
 docker exec -it litellm python3 -c "
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 print('NEW:  ', encrypt_value_helper('http://192.168.75.16:4000'))
+print('NEW:  ', encrypt_value_helper('https://litellm.int.pro-avb.com:8443'))
 print('EMPTY:', encrypt_value_helper(''))"
 ```
 
