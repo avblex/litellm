@@ -30,5 +30,24 @@
 Три слоя лимитов, сброс по `budget_duration`, типовые грабли — в
 [../docs/budgets/README.md](../docs/budgets/README.md)
 
-# fix DB verison
-docker exec litellm-db psql -d litellm -U llmproxy -c "ALTER DATABASE litellm REFRESH COLLATION VERSION;"
+# fix DB collation version mismatch
+
+После смены образа БД (например, `postgres:16` на bookworm с glibc 2.36 ->
+`postgres:16.14` на trixie с glibc 2.41) лог Postgres предупреждает на каждое
+подключение: `database "..." has a collation version mismatch ... created using
+collation version 2.36, but the operating system provides version 2.41`.
+Правила сортировки даёт libc, Postgres запоминает её версию при initdb, а новые
+индексы строятся по правилам текущей libc. Предупреждения появляются по каждой БД
+(`litellm`, `postgres`, `template1`)
+
+Лечение: перестроить индексы текущими правилами и обновить запомненную версию,
+для каждой базы своей командой:
+
+```bash
+docker compose exec db psql -U litellm -d litellm -c 'REINDEX DATABASE litellm;' -c 'ALTER DATABASE litellm REFRESH COLLATION VERSION;'
+docker compose exec db psql -U litellm -d postgres -c 'REINDEX DATABASE postgres;' -c 'ALTER DATABASE postgres REFRESH COLLATION VERSION;'
+docker compose exec db psql -U litellm -d template1 -c 'REINDEX DATABASE template1;' -c 'ALTER DATABASE template1 REFRESH COLLATION VERSION;'
+```
+
+Альтернатива без REINDEX: остаться на старой libc, запинить
+`image: postgres:16.14-bookworm`, тогда метаданные совпадут с библиотекой сами
