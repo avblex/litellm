@@ -19,6 +19,7 @@ services:
       - "4001:4001"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://litellm:password@litellm-db:5432/litellm}
+      REDIS_URL: redis://litellm-redis:6379
       MAX_STRING_LENGTH_PROMPT_IN_DB: ${MAX_STRING_LENGTH_PROMPT_IN_DB:-50000}
       #STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
       # SEARXNG_API_BASE: ${SEARXNG_API_BASE:-http://searxng:8080}
@@ -27,6 +28,7 @@ services:
       - .env
     depends_on:
       - db
+      - redis
     healthcheck:
       test: [ "CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:4000/health/liveliness || exit 1" ]
       interval: 30s
@@ -37,6 +39,18 @@ services:
     networks:
       - default
       - shared
+
+  redis:
+    container_name: litellm-redis
+    image: redis:7
+    volumes:
+      - litellm_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   db:
     container_name: litellm-db
@@ -58,6 +72,8 @@ services:
 
 volumes:
   litellm_postgres_data:
+    driver: local
+  litellm_redis_data:
     driver: local
 
 networks:
