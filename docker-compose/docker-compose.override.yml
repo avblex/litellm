@@ -1,0 +1,6 @@
+services:
+  litellm:
+    volumes:
+      - ./entrypoint.sh:/app/entrypoint.sh
+      - ./patch.py:/app/patch.py
+    entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
