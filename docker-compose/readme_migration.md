@@ -44,13 +44,20 @@ docker exec litellm sh -c 'env | grep -E "LITELLM_SALT_KEY|MASTER_KEY"'
 ```bash
 docker compose up -d
 # на старом хосте (без логов):
-docker compose exec db pg_dump -U litellm -d litellm  --exclude-table-data='public."LiteLLM_SpendLogs"' > litellm_dump.sql
+docker compose exec db pg_dump -U litellm -d litellm --clean --if-exists --exclude-table-data='public."LiteLLM_SpendLogs"' > litellm_dump.sql
 # или вместе с логами:
-docker compose exec db pg_dump -U litellm -d litellm  > litellm_dump_full.sql
-# pg_dump со старого хоста:
-docker exec -i litellm-db pg_restore -U litellm -d litellm --clean --if-exists < litellm.dump
+docker compose exec db pg_dump -U litellm -d litellm --clean --if-exists > litellm_dump_full.sql
+# перенести файл на новый хост и восстановить (plain SQL -> psql, не pg_restore):
+docker compose exec -T db psql -U litellm -d litellm < litellm_dump.sql
 docker restart litellm
 ```
+
+`pg_restore` нужен только для дампов в формате custom/directory (`pg_dump -Fc`);
+для plain SQL он печатает "input file appears to be a text format dump. Please
+use psql". Если хочется `pg_restore`, дамп надо снимать с `-Fc` и восстанавливать
+`pg_restore -U litellm -d litellm --clean --if-exists litellm_dump.dump`.
+`--clean --if-exists` в дамп-команде означает, что при восстановлении старые
+объекты будут удалены и пересозданы, а не наложены поверх
 
 ### 3. Поправить `proxy_base_url` в SSO-конфиге (главный пункт)
 
