@@ -123,7 +123,30 @@ grep -E "Max Input Tokens|Falling back|Selected deployment" litellm.log | tail -
 `Selected deployment` с fast-деплойментом. Для сравнения тот же объем в обычном текстовом
 `content` (не thinking) обязан дать `Got=~80000` и уйти на long
 
-## 6. KV-бюджет vLLM
+## 6. Перенос на другой стенд
+
+Всё состояние (модели шага 1, fallback шага 3, алиасы) достаётся из API, поэтому
+перенос делается скриптами рядом с этим readme, без доступа к БД старого стенда:
+
+```bash
+# на рабочем стенде
+PROXY_URL=http://localhost:4000 ADMIN_KEY=*** ./routing_export.sh
+# положить routing.dump.json на новый стенд, поправить в нём api_base, затем
+PROXY_URL=http://localhost:4000 ADMIN_KEY=*** ./routing_restore.sh
+```
+
+`routing_export.sh` читает `GET /model/info` (деплойменты с `db_model: true`,
+`max_parallel_requests` ответ отдаёт) и `GET /router/settings` (fallbacks, алиасы),
+складывает в `routing.dump.json`. `routing_restore.sh` прогоняет модели через
+`POST /model/new` и настройки через `POST /config/update` - всё применяется к живому
+роутеру, рестарт не нужен
+
+Единственное исключение - `enable_pre_call_checks` (шаг 2): он лежит в дампе и в
+строке `router_settings` для полноты, но живой роутер его из БД не подхватывает,
+нужна секция `router_settings` в config.yaml нового стенда до старта. Алиасы и
+fallback'и из той же строки применяются на лету, их дублировать в yaml не нужно
+
+## 7. KV-бюджет vLLM
 
 Расчёт от "GPU KV cache size" из логов старта vLLM (для MGU4 ~2.9M токенов):
 `N_fast x (L_fast + A) + N_long x (L_long + A) <= B`, где A ~8k запас на генерацию.

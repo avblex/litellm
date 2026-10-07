@@ -11,12 +11,14 @@ docker-томы, вся база Postgres.
 Значения старого хоста могут быть **зашифрованы в БД** и поэтому не находятся
 ни одним `grep` по дампу или файлам. Ищем их по таблицам:
 
-| Где | Таблица / поле | Что хранит |
-|---|---|---|
-| SSO-конфиг | `LiteLLM_SSOConfig.sso_settings` → `proxy_base_url` | базовый URL UI; подставляется во ВСЕ редиректы после логина (и локального, и SSO), перезаписывает env `PROXY_BASE_URL` при старте |
-| Секреты провайдеров | `LiteLLM_CredentialsTable.credential_values` | api_key / api_base (шифрованные) |
-| Конфиг из UI | `LiteLLM_Config.param_value` | general/litellm/router settings |
-| UI-настройки | `LiteLLM_UISettings.ui_settings` | флаги интерфейса |
+
+| Где                 | Таблица / поле                                      | Что хранит                                                                                                                        |
+| ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| SSO-конфиг          | `LiteLLM_SSOConfig.sso_settings` → `proxy_base_url` | базовый URL UI; подставляется во ВСЕ редиректы после логина (и локального, и SSO), перезаписывает env `PROXY_BASE_URL` при старте |
+| Секреты провайдеров | `LiteLLM_CredentialsTable.credential_values`        | api_key / api_base (шифрованные)                                                                                                  |
+| Конфиг из UI        | `LiteLLM_Config.param_value`                        | general/litellm/router settings                                                                                                   |
+| UI-настройки        | `LiteLLM_UISettings.ui_settings`                    | флаги интерфейса                                                                                                                  |
+
 
 Шифрование привязано к `LITELLM_SALT_KEY` (при его отсутствии — к `MASTER_KEY`).
 Если на новом хосте ключ другой, все зашифрованные поля становятся нечитаемыми:
@@ -41,6 +43,10 @@ docker exec litellm sh -c 'env | grep -E "LITELLM_SALT_KEY|MASTER_KEY"'
 
 ```bash
 docker compose up -d
+# на старом хосте (без логов):
+docker compose exec db pg_dump -U litellm -d litellm  --exclude-table-data='public."LiteLLM_SpendLogs"' > litellm_dump.sql
+# или вместе с логами:
+docker compose exec db pg_dump -U litellm -d litellm  > litellm_dump_full.sql
 # pg_dump со старого хоста:
 docker exec -i litellm-db pg_restore -U litellm -d litellm --clean --if-exists < litellm.dump
 docker restart litellm
@@ -142,3 +148,4 @@ docker exec litellm-db psql -U litellm -d litellm -c 'table "LiteLLM_SSOConfig";
 docker exec litellm-db psql -U litellm -d litellm -c "select param_name from \"LiteLLM_Config\";"
 docker exec litellm-db psql -U litellm -d litellm -c 'table "LiteLLM_CredentialsTable";'
 ```
+
