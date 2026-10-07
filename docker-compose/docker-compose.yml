@@ -18,7 +18,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://litellm:password@litellm-db:5432/litellm}
       MAX_STRING_LENGTH_PROMPT_IN_DB: "50000"
       #STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
-      SEARXNG_API_BASE: ${SEARXNG_API_BASE:-http://searxng:8080}
+      # SEARXNG_API_BASE: ${SEARXNG_API_BASE:-http://searxng:8080}
       PYTHONPATH: /app
     env_file:
       - .env
@@ -31,6 +31,9 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
+    networks:
+      - default
+      - shared
 
   db:
     container_name: litellm-db
@@ -53,3 +56,7 @@ services:
 volumes:
   litellm_postgres_data:
     driver: local
+
+networks:
+  shared:
+    external: true
