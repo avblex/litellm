@@ -72,7 +72,8 @@ services:
 
 volumes:
   litellm_postgres_data:
-    driver: local
+    external: true
+    name: litellm_litellm_postgres_data
   litellm_redis_data:
     driver: local
 
