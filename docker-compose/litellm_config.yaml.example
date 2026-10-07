@@ -40,7 +40,6 @@ litellm_settings:
     - litellm_hooks.proxy_handler_instance
     - websearch_interception
     - custom_tokenizer_patch._loader_instance
-    
     - prometheus
   websearch_interception_params:
     enabled_providers:
