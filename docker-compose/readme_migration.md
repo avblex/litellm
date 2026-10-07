@@ -73,6 +73,7 @@ LiteLLM внутри контейнера (ключ возьмёт из окру
 docker exec -it litellm python3 -c "
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 print('NEW:  ', encrypt_value_helper('http://192.168.75.16:4000'))
+print('NEW:  ', encrypt_value_helper('https://litellm.int.pro-avb.com:8443'))
 print('EMPTY:', encrypt_value_helper(''))"
 ```
 
