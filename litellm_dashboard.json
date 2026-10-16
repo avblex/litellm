@@ -1196,7 +1196,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 87
       },
       "id": 16,
       "panels": [],
@@ -1247,7 +1247,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 80
+        "y": 88
       },
       "id": 17,
       "maxDataPoints": 60,
@@ -1365,7 +1365,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 80
+        "y": 88
       },
       "id": 21,
       "maxDataPoints": 60,
@@ -1483,7 +1483,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 97
       },
       "id": 9,
       "maxDataPoints": 60,
@@ -1600,7 +1600,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 97
       },
       "id": 20,
       "maxDataPoints": 60,
@@ -1823,7 +1823,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 107
+        "y": 115
       },
       "id": 22,
       "panels": [],
@@ -1896,7 +1896,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 108
+        "y": 116
       },
       "id": 23,
       "maxDataPoints": 60,
@@ -2000,7 +2000,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 108
+        "y": 116
       },
       "id": 25,
       "maxDataPoints": 60,
@@ -2104,7 +2104,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 98
+        "y": 106
       },
       "id": 26,
       "maxDataPoints": 60,
@@ -2207,7 +2207,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 98
+        "y": 106
       },
       "id": 27,
       "maxDataPoints": 60,
@@ -2242,6 +2242,109 @@
         }
       ],
       "title": "Provider Failures per Endpoint",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Request size distribution by prompt tokens, using the input_sequence_length label on the LLM API latency histogram. Requires prometheus_emit_input_sequence_length_label: true in litellm_settings. Only successful requests are counted",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 32,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "id": 28,
+      "maxDataPoints": 60,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.1.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (input_sequence_length) (rate(litellm_llm_api_latency_metric_count{job=~\"$job\", instance=~\"$instance\", model=~\"$model\", input_sequence_length=~\".+\"}[$__rate_interval]))",
+          "legendFormat": "{{input_sequence_length}} tokens",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Request Size Distribution (input tokens)",
       "type": "timeseries"
     }
   ],
